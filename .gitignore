@@ -1,0 +1,13 @@
+build*/
+.vs/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.db
+*.sqlite
+*.sqlite3
+.venv-model/
+__pycache__/
+*.pyc
+local-data/

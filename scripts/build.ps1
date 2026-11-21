@@ -2,7 +2,8 @@ param(
   [ValidateSet("Release","Debug")]
   [string]$Config = "Release",
   [ValidateSet("auto","msvc","mingw")]
-  [string]$Toolchain = "auto"
+  [string]$Toolchain = "auto",
+  [switch]$BuildTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -104,10 +105,11 @@ if ($Toolchain -eq "msvc") {
 
     $res = Join-Path $outDir "diswitcher.res"
     if (Test-Path $res) {
-      & cl @cflags "..\src\main.c" $res /Fe:$exe user32.lib shell32.lib gdi32.lib /link /SUBSYSTEM:WINDOWS | Write-Host
+      & cl @cflags "/I..\third_party\sqlite" "..\src\main.c" "..\third_party\sqlite\sqlite3.c" $res /Fe:$exe user32.lib shell32.lib gdi32.lib comdlg32.lib /link /SUBSYSTEM:WINDOWS | Write-Host
     } else {
-      & cl @cflags "..\src\main.c" /Fe:$exe user32.lib shell32.lib gdi32.lib /link /SUBSYSTEM:WINDOWS | Write-Host
+      & cl @cflags "/I..\third_party\sqlite" "..\src\main.c" "..\third_party\sqlite\sqlite3.c" /Fe:$exe user32.lib shell32.lib gdi32.lib comdlg32.lib /link /SUBSYSTEM:WINDOWS | Write-Host
     }
+    if ($LASTEXITCODE -ne 0) { throw "Application compilation failed (exit $LASTEXITCODE)" }
   } finally {
     Pop-Location
   }
@@ -133,12 +135,33 @@ elseif ($Toolchain -eq "mingw") {
 
   $resObj = Join-Path $outDir "diswitcher_res.o"
   if (Test-Path $resObj) {
-    & gcc @cflags "-municode" "-mwindows" (Join-Path $PSScriptRoot "..\src\main.c") $resObj "-o" $exe "-luser32" "-lshell32" "-lgdi32"
+    & gcc @cflags "-I$(Join-Path $PSScriptRoot '..\third_party\sqlite')" "-municode" "-mwindows" (Join-Path $PSScriptRoot "..\src\main.c") (Join-Path $PSScriptRoot "..\third_party\sqlite\sqlite3.c") $resObj "-o" $exe "-luser32" "-lshell32" "-lgdi32" "-lcomdlg32"
   } else {
-    & gcc @cflags "-municode" "-mwindows" (Join-Path $PSScriptRoot "..\src\main.c") "-o" $exe "-luser32" "-lshell32" "-lgdi32"
+    & gcc @cflags "-I$(Join-Path $PSScriptRoot '..\third_party\sqlite')" "-municode" "-mwindows" (Join-Path $PSScriptRoot "..\src\main.c") (Join-Path $PSScriptRoot "..\third_party\sqlite\sqlite3.c") "-o" $exe "-luser32" "-lshell32" "-lgdi32" "-lcomdlg32"
   }
+  if ($LASTEXITCODE -ne 0) { throw "Application compilation failed (exit $LASTEXITCODE)" }
   Write-Host "Built: $exe"
 }
 else {
   throw "Unknown toolchain: $Toolchain"
+}
+
+$modelSource = Join-Path $PSScriptRoot '..\models\language_model.bin'
+if (-not (Test-Path -LiteralPath $modelSource)) { throw 'Missing language model. See litert_tools/README.md.' }
+Copy-Item -LiteralPath $modelSource -Destination (Join-Path $outDir 'language_model.bin') -Force
+$licenseDestination = Join-Path $outDir 'model-licenses'
+New-Item -ItemType Directory -Force -Path $licenseDestination | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '..\models\licenses') -File | ForEach-Object {
+  Copy-Item -LiteralPath $_.FullName -Destination $licenseDestination -Force
+}
+
+if ($BuildTests) {
+  if ($Toolchain -ne 'msvc') { throw 'The native test probe currently requires MSVC.' }
+  Push-Location $outDir
+  try {
+    & cl /nologo /W4 /utf-8 /O2 '..\tests\model_probe.c' /Fe:model_probe.exe | Write-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Native test probe compilation failed.' }
+    & cl /nologo /W4 /utf-8 /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX /I'..\third_party\sqlite' '..\tests\typing_tests.c' '..\third_party\sqlite\sqlite3.c' /Fe:typing_tests.exe user32.lib shell32.lib gdi32.lib comdlg32.lib /link /SUBSYSTEM:CONSOLE | Write-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Keyboard state tests compilation failed.' }
+  } finally { Pop-Location }
 }
